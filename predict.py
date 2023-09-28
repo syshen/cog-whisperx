@@ -23,11 +23,17 @@ class Predictor(BasePredictor):
         batch_size: int = Input(description="Parallelization of input audio transcription", default=32),
         align_output: bool = Input(description="Use if you need word-level timing and not just batched transcription", default=False),
         only_text: bool = Input(description="Set if you only want to return text; otherwise, segment metadata will be returned as well.", default=False),
+        hf_token: str = Input(description="Hugging Face Access Token to access PyAnnote gated models", default=None),
+        diarize: bool = Input(description="Apply diarization to assign speaker labels to each segment/word (default: False)", default=False),
+        min_speakers: int = Input(description="Minimum number of speakers to in audio file", default=None),
+        max_speakers: int = Input(description="Maximum number of speakers to in audio file", default=None),
         debug: bool = Input(description="Print out memory usage information.", default=False)
     ) -> str:
         """Run a single prediction on the model"""
         with torch.inference_mode():
             result = self.model.transcribe(str(audio), batch_size=batch_size) 
+            if debug:
+              print (result)
             # result is dict w/keys ['segments', 'language']
             # segments is a list of dicts,each dict has {'text': <text>, 'start': <start_time_msec>, 'end': <end_time_msec> }
             if align_output:
@@ -38,8 +44,39 @@ class Predictor(BasePredictor):
                 #   it is also sorted
                 # aligned_result['segments'] - same as result segments, but w/a ['words'] segment which contains timing information above. 
                 # return_char_alignments adds in character level alignments. it is: too many. 
+            if diarize:
+              if hf_token is None:
+                print("Warning, no --hf_token used, needs to be saved in environment variable, otherwise will throw error loading diarization model...")
+              else:
+                diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=self.device)
+                diarize_segments = diarize_model(str(audio), min_speakers=min_speakers, max_speakers=max_speakers)
+                result = whisperx.diarize.assign_word_speakers(diarize_segments, result)
+                if debug:
+                  print(diarize_segments)
+                  print(result)
+                if only_text:
+                  if align_output:
+                    output = ''
+                    for ent in result["segments"]:
+                      speaker = ''
+                      words = []
+                      for word in ent['words']:
+                        if 'speaker' in word:
+                          if word['speaker'] != speaker:
+                            if len(words) > 0:
+                              output += f"{speaker}:\n{' '.join(words)}\n\n"
+                              words = []
+                          speaker = word['speaker']
+                        words.append(word['word'])
+                      if len(words) > 0:
+                        output += f"{speaker}:\n{' '.join(words)}\n\n"
+                    return output
+                  else:
+                    return ''.join([f"{val['speaker']}:\n{val['text'].strip()}\n\n" for val in result["segments"]])
+
             if only_text:
-                return ''.join([val.text for val in result['segments']])
+                return ''.join([val['text'] for val in result["segments"]])
+
             if debug:
                 print(f"max gpu memory allocated over runtime: {torch.cuda.max_memory_reserved() / (1024 ** 3):.2f} GB")
         return json.dumps(result['segments'])
