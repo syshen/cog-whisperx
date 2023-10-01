@@ -22,7 +22,8 @@ build:
     - "transformers"
     - "ffmpeg-python>=0.2"
     - "nltk"
-    - "git+https://github.com/m-bain/whisperX.git@e94b9043085c32c365b2b60f23e73b2d03c2241c"
+    - "git+https://github.com/m-bain/whisperX.git@07fafa37b3ef7ce8628b194da302a5a996bb7d37"
+    # - "git+https://github.com/m-bain/whisperX.git@e94b9043085c32c365b2b60f23e73b2d03c2241c"
 
   run: 
     - "pip install ipython"
