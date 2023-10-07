@@ -2,26 +2,25 @@
 # https://github.com/replicate/cog/blob/main/docs/python.md
 import os
 os.environ['HF_HOME'] = '/src/hf_models'
+os.environ['HUGGINGFACE_HUB_CACHE'] = '/src/hf_models/hub'
 os.environ['TORCH_HOME'] = '/src/torch_models'
+os.environ['PYANNOTE_CACHE'] = '/src/torch_models/pyannote'
 from cog import BasePredictor, Input, Path
 import torch
 import whisperx
 import json
+import time
 
 
-compute_type="float16"
 class Predictor(BasePredictor):
-    def setup(self):
-        """Load the model into memory to make running multiple predictions efficient"""
-        self.device = "cuda"
-        self.model = whisperx.load_model("large-v2", self.device, language="en", compute_type=compute_type)
-        self.alignment_model, self.metadata = whisperx.load_align_model(language_code="en", device=self.device)
-
     def predict(
         self,
         audio: Path = Input(description="Audio file"),
+        device: str = Input(description="Device name", default="cuda"),
+        language: str = Input(description="Language", default="en"),
+        model_name: str = Input(description="Whisper model", default="large-v2"),
+        compute_type: str = Input(description="Compute type", default="float16"),
         batch_size: int = Input(description="Parallelization of input audio transcription", default=32),
-        align_output: bool = Input(description="Use if you need word-level timing and not just batched transcription", default=False),
         only_text: bool = Input(description="Set if you only want to return text; otherwise, segment metadata will be returned as well.", default=False),
         hf_token: str = Input(description="Hugging Face Access Token to access PyAnnote gated models", default=None),
         diarize: bool = Input(description="Apply diarization to assign speaker labels to each segment/word (default: False)", default=False),
@@ -29,50 +28,44 @@ class Predictor(BasePredictor):
         max_speakers: int = Input(description="Maximum number of speakers to in audio file", default=None),
         debug: bool = Input(description="Print out memory usage information.", default=False)
     ) -> str:
+        self.device = device
+        self.model = whisperx.load_model(model_name, device=self.device, language=language, compute_type=compute_type)
+
+        # self.alignment_model, self.metadata = whisperx.load_align_model(language_code="en", device=self.device)
         """Run a single prediction on the model"""
         with torch.inference_mode():
+            t1 = time.perf_counter(), time.process_time()
+
             result = self.model.transcribe(str(audio), batch_size=batch_size) 
             if debug:
               print (result)
-            # result is dict w/keys ['segments', 'language']
-            # segments is a list of dicts,each dict has {'text': <text>, 'start': <start_time_msec>, 'end': <end_time_msec> }
-            if align_output:
-                # NOTE - the "only_text" flag makes no sense with this flag, but we'll do it anyway
-                result = whisperx.align(result['segments'], self.alignment_model, self.metadata, str(audio), self.device, return_char_alignments=False)
-                # dict w/keys ['segments', 'word_segments']
-                # aligned_result['word_segments'] = list[dict], each dict contains {'word': <word>, 'start': <start_time_msec>, 'end': <end_time_msec>, 'score': probability}
-                #   it is also sorted
-                # aligned_result['segments'] - same as result segments, but w/a ['words'] segment which contains timing information above. 
-                # return_char_alignments adds in character level alignments. it is: too many. 
+
+            t2 = time.perf_counter(), time.process_time()
+            if debug:
+              print(f"> Finish transcription")
+              print(f"  Real time: {t2[0] - t1[0]:.2f} seconds")
+              print(f"  CPU time: {t2[1] - t1[1]:.2f} seconds")
+
             if diarize:
-              if hf_token is None:
+              if hf_token is None: 
                 print("Warning, no --hf_token used, needs to be saved in environment variable, otherwise will throw error loading diarization model...")
               else:
+                
+                self.model = None
                 diarize_model = whisperx.diarize.DiarizationPipeline(use_auth_token=hf_token, device=self.device)
                 diarize_segments = diarize_model(str(audio), min_speakers=min_speakers, max_speakers=max_speakers)
+
+                t3 = time.perf_counter(), time.process_time()
+                if debug:
+                  print("> Finish diarization")
+                  print(f"  Real time: {t3[0] - t2[0]:.2f} seconds")
+                  print(f"  CPU time: {t3[1] - t2[1]:.2f} seconds")
+
                 result = whisperx.diarize.assign_word_speakers(diarize_segments, result)
                 if debug:
-                  print(diarize_segments)
                   print(result)
                 if only_text:
-                  if align_output:
-                    output = ''
-                    for ent in result["segments"]:
-                      speaker = ''
-                      words = []
-                      for word in ent['words']:
-                        if 'speaker' in word:
-                          if word['speaker'] != speaker:
-                            if len(words) > 0:
-                              output += f"{speaker}:\n{' '.join(words)}\n\n"
-                              words = []
-                          speaker = word['speaker']
-                        words.append(word['word'])
-                      if len(words) > 0:
-                        output += f"{speaker}:\n{' '.join(words)}\n\n"
-                    return output
-                  else:
-                    return ''.join([f"{val['speaker']}:\n{val['text'].strip()}\n\n" for val in result["segments"]])
+                  return ''.join([f"{val['speaker']}:\n{val['text'].strip()}\n\n" for val in result["segments"]])
 
             if only_text:
                 return ''.join([val['text'] for val in result["segments"]])

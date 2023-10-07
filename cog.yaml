@@ -17,17 +17,22 @@ build:
   # a list of packages in the format <package-name>==<version>
   python_packages:
     - "torch>=2.0"
-    - "torchaudio>=2.0.0"
-    - "faster-whisper>=0.8"
+    - "torchaudio>=2.0.1"
+    - "faster-whisper"
     - "transformers"
     - "ffmpeg-python>=0.2"
+    - "pyannote.audio>=3.0.1"
     - "nltk"
-    - "git+https://github.com/m-bain/whisperX.git@07fafa37b3ef7ce8628b194da302a5a996bb7d37"
+    - "git+https://github.com/syshen/whisperX.git@367c8781596257b328da961adf4cc77bb208e6d5"
     # - "git+https://github.com/m-bain/whisperX.git@e94b9043085c32c365b2b60f23e73b2d03c2241c"
 
   run: 
+    # work around https://github.com/m-bain/whisperX/issues/499
+    - "pip uninstall -y onnxruntime"
+    - "pip install --force-reinstall onnxruntime-gpu"
     - "pip install ipython"
 
 predict: 'predict.py:Predictor'
+
 
 
